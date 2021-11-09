@@ -351,6 +351,36 @@ fu_hwids_convert_integer_cb(FuSmbios *smbios, guint8 type, guint8 offset, GError
 	return g_strdup_printf("%x", tmp);
 }
 
+static gboolean
+fu_hwids_setup_overrides(FuHwids *self, GError **error)
+{
+	g_autofree gchar *localstatedir = NULL;
+	g_autofree gchar *fn = NULL;
+	g_autoptr(GKeyFile) kf = g_key_file_new();
+	g_autoptr(GPtrArray) keys = fu_hwids_get_keys(self);
+
+	/* optional override */
+	localstatedir = fu_common_get_path(FU_PATH_KIND_LOCALSTATEDIR_PKG);
+	fn = g_build_filename(localstatedir, "hwids.conf", NULL);
+	if (!g_file_test(fn, G_FILE_TEST_EXISTS)) {
+		g_debug("not loading HwId overrides from %s", fn);
+		return TRUE;
+	}
+
+	/* all keys are optional */
+	if (!g_key_file_load_from_file(kf, fn, G_KEY_FILE_NONE, error))
+		return FALSE;
+	for (guint i = 0; i < keys->len; i++) {
+		const gchar *key = g_ptr_array_index(keys, i);
+		g_autofree gchar *value = g_key_file_get_string(kf, "fwupd", key, NULL);
+		if (value != NULL)
+			fu_hwids_add_smbios_override(self, key, value);
+	}
+
+	/* success */
+	return TRUE;
+}
+
 /**
  * fu_hwids_setup:
  * @self: a #FuHwids
@@ -428,6 +458,10 @@ fu_hwids_setup(FuHwids *self, FuSmbios *smbios, GError **error)
 	g_return_val_if_fail(FU_IS_HWIDS(self), FALSE);
 	g_return_val_if_fail(FU_IS_SMBIOS(smbios) || smbios == NULL, FALSE);
 	g_return_val_if_fail(error == NULL || *error == NULL, FALSE);
+
+	/* override using a config file */
+	if (!fu_hwids_setup_overrides(self, error))
+		return FALSE;
 
 	/* get all DMI data */
 	for (guint i = 0; map[i].key != NULL; i++) {
